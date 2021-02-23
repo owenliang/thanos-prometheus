@@ -1,11 +1,6 @@
 apiVersion: v1
 kind: Service
 metadata:
-  annotations:
-    service.beta.kubernetes.io/ucloud-load-balancer-type: Inner
-    service.beta.kubernetes.io/ucloud-load-balancer-vserver-client-timeout: '0'
-    service.beta.kubernetes.io/ucloud-load-balancer-vserver-method: Roundrobin
-    service.beta.kubernetes.io/ucloud-load-balancer-vserver-protocol: TCP
   name: thanos-querier
   namespace: monitoring
 spec:
@@ -16,7 +11,7 @@ spec:
     targetPort: 9090
   selector:
     app: thanos-querier
-  type: LoadBalancer
+  type: NodePort
 ---
 apiVersion: apps/v1
 kind: Deployment
