@@ -1,0 +1,150 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: thanos-receive-nodeport
+  namespace: monitoring
+spec:
+  ports:
+  - name: http
+    port: 10902
+    protocol: TCP
+    targetPort: 10902
+  - name: remote-write
+    port: 19291
+    protocol: TCP
+    targetPort: 19291
+  - name: grpc
+    port: 10901
+    protocol: TCP
+    targetPort: 10901
+  selector:
+    app: thanos-receive
+  type: NodePort
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: thanos-receive
+  namespace: monitoring
+spec:
+  ports:
+  - name: http
+    port: 10902
+    protocol: TCP
+    targetPort: 10902
+  - name: remote-write
+    port: 19291
+    protocol: TCP
+    targetPort: 19291
+  - name: grpc
+    port: 10901
+    protocol: TCP
+    targetPort: 10901
+  selector:
+    app: thanos-receive
+  # headless服务
+  clusterIP: None
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: thanos-receive-config
+  namespace: monitoring
+data:
+  # 域名通过headless service规则可以预先获知：https://kubernetes.io/zh/docs/concepts/services-networking/dns-pod-service/#srv-records
+  thanos-receive-hashrings: |
+    [
+      {
+        "endpoints":
+        [
+          "thanos-receive-0.thanos-receive.monitoring.svc.cluster.local:10901",
+          "thanos-receive-1.thanos-receive.monitoring.svc.cluster.local:10901",
+          "thanos-receive-2.thanos-receive.monitoring.svc.cluster.local:10901"
+        ]
+      }
+    ]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: thanos-receive
+  namespace: monitoring
+spec:
+  replicas: 3
+  serviceName: thanos-receive
+  selector:
+    matchLabels:
+      app: thanos-receive
+  template:
+    metadata:
+      labels:
+        app: thanos-receive
+    spec:
+      # 禁止2个POD出现在同一个node上
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - thanos-receive
+            topologyKey: "kubernetes.io/hostname"
+      containers:
+      - args:
+        - receive
+        - --grpc-address=0.0.0.0:10901
+        - --http-address=0.0.0.0:10902
+        - --remote-write.address=0.0.0.0:19291
+        - --tsdb.path=/thanos-receive-data
+        - --tsdb.retention=15d
+        - --receive.replication-factor=2
+        - --receive.hashrings-file=/etc/thanos/thanos-receive-hashrings
+        - --receive.local-endpoint=$(NAME).thanos-receive.$(NAMESPACE).svc.cluster.local:10901
+        - --label=replica="$(NAME)"
+        name: thanos-receive
+        image: registry-team.smzdm.com/prometheus/thanos:v0.18.0
+        volumeMounts:
+        - mountPath: /etc/thanos
+          name: thanos-receive-config
+        - mountPath: /thanos-receive-data
+          name: thanos-receive-data
+        livenessProbe:
+          failureThreshold: 10
+          httpGet:
+            path: /-/healthy
+            port: 10902
+            scheme: HTTP
+          initialDelaySeconds: 60
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 3
+        readinessProbe:
+          failureThreshold: 10
+          httpGet:
+            path: /-/ready
+            port: 10902
+            scheme: HTTP
+          initialDelaySeconds: 60
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 3
+        env:
+        - name: NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+      terminationGracePeriodSeconds: 60
+      volumes:
+      - name: thanos-receive-data
+        hostPath:
+          path: /data/thanos-receive-data
+          type: DirectoryOrCreate
+      - name: thanos-receive-config
+        configMap:
+          name: thanos-receive-config
